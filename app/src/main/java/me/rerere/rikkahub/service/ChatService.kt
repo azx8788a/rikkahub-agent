@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.completeWith
@@ -45,8 +47,11 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.Provider
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.ui.StreamChunk
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -135,8 +140,16 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
-private const val COMPACTION_REQUEST_TIMEOUT_MS = 3 * 60_000L
-private const val COMPACTION_TOTAL_TIMEOUT_MS = 8 * 60_000L
+/**
+ * Relays and mobile carriers routinely drop quiet connections long before a large
+ * non-streaming LLM request finishes, so compaction requests stream and are only bounded
+ * by generous ceilings: an absolute per-request cap, a total budget for the whole
+ * map-reduce plan, and a stall watchdog that fires when no stream data arrives at all.
+ */
+private const val COMPACTION_REQUEST_TIMEOUT_MS = 10 * 60_000L
+private const val COMPACTION_TOTAL_TIMEOUT_MS = 30 * 60_000L
+private const val COMPACTION_STREAM_STALL_MS = 90_000L
+private const val COMPACTION_REQUEST_MAX_RETRIES = 2
 private const val COMPACTION_MAX_REQUEST_OUTPUT_TOKENS = 16_384
 private const val MAX_PARALLEL_COMPACTION_REQUESTS = 4
 private const val MAX_FULL_CONTEXT_MAP_GROUPS = 8
@@ -2693,16 +2706,15 @@ class ChatService(
             }
 
             val result = withTimeout(COMPACTION_REQUEST_TIMEOUT_MS) {
-                providerHandler.generateText(
+                collectCompactionStreamText(
+                    providerHandler = providerHandler,
                     providerSetting = provider,
-                    messages = listOf(UIMessage.user(prompt)),
-                    params = backgroundTextGenerationParams(model).copy(
-                        maxTokens = requestedTargetTokens,
-                    ),
+                    model = model,
+                    prompt = prompt,
                 )
             }
 
-            return result.message.toText().trim()
+            return result.trim()
                 .takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
@@ -2738,6 +2750,35 @@ class ChatService(
                 "parallelism=$MAX_PARALLEL_COMPACTION_REQUESTS, mapPreviews=$usingMapPreviews",
         )
 
+        suspend fun compressSourcesWithRetry(
+            sources: List<String>,
+            requestedTargetTokens: Int,
+        ): String {
+            var lastError: Throwable? = null
+            repeat(1 + COMPACTION_REQUEST_MAX_RETRIES) { attempt ->
+                if (attempt > 0) {
+                    val backoffMs = if (attempt == 1) 10_000L else 30_000L
+                    Log.w(
+                        TAG,
+                        "Compaction request failed (attempt $attempt/" +
+                            "${COMPACTION_REQUEST_MAX_RETRIES + 1}), retrying in " +
+                            "${backoffMs / 1000}s: ${lastError?.message}",
+                    )
+                    delay(backoffMs)
+                }
+                try {
+                    return compressSources(sources, requestedTargetTokens)
+                } catch (e: CancellationException) {
+                    // Timeouts and user cancellation are terminal for this request; retrying
+                    // after a 10-minute cap would also blow the total budget.
+                    throw e
+                } catch (e: Throwable) {
+                    lastError = e
+                }
+            }
+            throw lastError ?: IllegalStateException("Compaction request failed after retries")
+        }
+
         suspend fun compressGroups(
             groups: List<List<String>>,
             requestedTargetTokens: Int,
@@ -2747,7 +2788,7 @@ class ChatService(
                 coroutineScope {
                     batch.map { group ->
                         async(Dispatchers.IO) {
-                            compressSources(group, requestedTargetTokens)
+                            compressSourcesWithRetry(group, requestedTargetTokens)
                         }
                     }.awaitAll()
                 }
@@ -2822,6 +2863,46 @@ class ChatService(
         )
         conversationRepo.upsertCompaction(compaction)
         compaction
+    }
+
+    /**
+     * Collect a background generation through the streaming API. Non-streaming compaction
+     * requests stay silent until the model finishes, which relays and mobile carriers treat
+     * as an idle connection and drop ("Socket closed"). Streaming keeps bytes flowing, and
+     * the watchdog only aborts when no chunk at all arrives within [COMPACTION_STREAM_STALL_MS].
+     */
+    private suspend fun <T : ProviderSetting> collectCompactionStreamText(
+        providerHandler: Provider<T>,
+        providerSetting: T,
+        model: Model,
+        prompt: String,
+    ): String = coroutineScope {
+        val lastActivityMs = AtomicLong(System.currentTimeMillis())
+        val watchdog = launch {
+            while (isActive) {
+                delay(5_000)
+                val idleMs = System.currentTimeMillis() - lastActivityMs.get()
+                check(idleMs <= COMPACTION_STREAM_STALL_MS) {
+                    "Compaction stream stalled for ${idleMs / 1000}s without any data"
+                }
+            }
+        }
+        val text = StringBuilder()
+        try {
+            providerHandler.streamText(
+                providerSetting = providerSetting,
+                messages = listOf(UIMessage.user(prompt)),
+                params = backgroundTextGenerationParams(model),
+            ).collect { chunk ->
+                lastActivityMs.set(System.currentTimeMillis())
+                if (chunk is StreamChunk.TextDelta) {
+                    text.append(chunk.text)
+                }
+            }
+        } finally {
+            watchdog.cancel()
+        }
+        text.toString()
     }
 
     // ---- 通知 ----
