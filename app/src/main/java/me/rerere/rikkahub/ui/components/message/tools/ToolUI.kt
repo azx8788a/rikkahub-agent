@@ -27,12 +27,13 @@ import me.rerere.common.http.jsonObjectOrNull
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Tools
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.ui.components.richtext.HighlightCodeBlock
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
-import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.JsonInstantPretty
 import me.rerere.rikkahub.utils.jsonPrimitiveOrNull
+import me.rerere.ui.components.FormItem
 
 /**
  * 工具调用的渲染上下文, 预解析好工具入参与输出, 避免各渲染器重复解析
@@ -45,6 +46,8 @@ data class ToolUIContext(
     val content: JsonElement?,
     /** 该工具调用是否在生成中 */
     val loading: Boolean,
+    /** 发起该工具调用的助手, 拿不到时为 null */
+    val assistant: Assistant? = null,
 )
 
 /**
@@ -100,6 +103,7 @@ object ToolUIRegistry {
         GetScreenTimeToolUI,
         CalendarQueryToolUI,
         CalendarCreateToolUI,
+        ChartDisplayToolUI,
         UseSkillToolUI,
         RecentChatsToolUI,
         ConversationSearchToolUI,

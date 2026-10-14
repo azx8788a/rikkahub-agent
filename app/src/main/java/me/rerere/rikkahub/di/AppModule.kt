@@ -245,7 +245,6 @@ val appModule = module {
 
     single {
         ChatToolFactory(
-            json = get(),
             memoryRepository = get(),
             conversationRepository = get(),
             localTools = get(),
@@ -264,6 +263,7 @@ val appModule = module {
             conversationRepo = get(),
             memoryRepository = get(),
             generationLoop = get(),
+            memoryConsolidationScheduler = get(),
             translationHandler = get(),
             templateTransformer = get(),
             providerManager = get(),
@@ -275,6 +275,18 @@ val appModule = module {
             toolApprovalPreferences = get(),
             workspaceRepository = get(),
             folderRepository = get()
+        )
+    }
+
+    single {
+        MediaCreationService(
+            context = get(),
+            appScope = get(),
+            settingsStore = get(),
+            repository = get(),
+            manager = get(),
+            remoteFileStore = get(),
+            okHttpClient = get(),
         )
     }
 

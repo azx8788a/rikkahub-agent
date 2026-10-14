@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
@@ -72,9 +73,6 @@ import me.rerere.hugeicons.stroke.Eye
 import me.rerere.hugeicons.stroke.View
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
-import me.rerere.rikkahub.ui.components.webview.WebView
-import me.rerere.rikkahub.ui.components.webview.WebViewContentCache
-import me.rerere.rikkahub.ui.components.webview.rememberWebViewState
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.Navigator
@@ -84,6 +82,9 @@ import me.rerere.rikkahub.ui.theme.AtomOneLightPalette
 import me.rerere.rikkahub.ui.theme.JetbrainsMono
 import me.rerere.rikkahub.ui.theme.LocalDarkMode
 import me.rerere.rikkahub.utils.toDp
+import me.rerere.ui.webview.WebView
+import me.rerere.ui.webview.WebViewContentCache
+import me.rerere.ui.webview.rememberWebViewState
 import kotlin.time.Clock
 
 private const val TAG = "HighlightCodeBlock"
@@ -272,15 +273,17 @@ private fun CodeBlockWithLineNumbersWrapped(
                 Row(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = (index + 1).toString().padStart(lineNumberWidth, ' '),
-                        fontSize = textStyle.fontSize,
-                        lineHeight = textStyle.lineHeight,
-                        fontFamily = JetbrainsMono,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        softWrap = false,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
+                    DisableSelection {
+                        Text(
+                            text = (index + 1).toString().padStart(lineNumberWidth, ' '),
+                            fontSize = textStyle.fontSize,
+                            lineHeight = textStyle.lineHeight,
+                            fontFamily = JetbrainsMono,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            softWrap = false,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                    }
                     CodeHighlightText(
                         code = line,
                         language = language,

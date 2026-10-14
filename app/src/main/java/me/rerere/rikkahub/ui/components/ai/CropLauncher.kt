@@ -13,7 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.net.toFile
-import com.dokar.sonner.ToastType
+import me.rerere.ui.toast.ToastType
 import com.yalantis.ucrop.UCrop
 import com.yalantis.ucrop.UCropActivity
 import me.rerere.common.android.Logging
@@ -68,7 +68,11 @@ internal fun useCropLauncher(
             setAllowedGestures(
                 UCropActivity.SCALE, UCropActivity.ROTATE, UCropActivity.NONE
             )
-            setCompressionFormat(Bitmap.CompressFormat.PNG)
+            // Chat attachments are written to a .jpg output file. PNG encoding is
+            // particularly expensive for large camera/gallery images and provides
+            // no benefit for this flow, so use JPEG to keep confirmation responsive.
+            setCompressionFormat(Bitmap.CompressFormat.JPEG)
+            setCompressionQuality(90)
         }).withMaxResultSize(4096, 4096)
         aspectRatio?.let { (x, y) ->
             crop = crop.withAspectRatio(x, y)

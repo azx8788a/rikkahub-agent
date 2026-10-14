@@ -69,19 +69,12 @@ data class Assistant(
     // the dispatch level; v1 only matches read-only tools so approval is a non-issue.
     val fastPathRouterEnabled: Boolean = false,
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
-    val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
 )
 
 @Serializable
 data class QuickMessage(
     val id: Uuid = Uuid.random(),
     val title: String = "",
-    val content: String = "",
-)
-
-@Serializable
-data class AssistantMemory(
-    val id: Int,
     val content: String = "",
 )
 

@@ -2,20 +2,30 @@ package me.rerere.rikkahub.data.datastore
 
 import android.content.Context
 import android.util.Log
+import androidx.datastore.core.CorruptionException
 import androidx.datastore.core.DataStore
 import androidx.datastore.core.IOException
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.SharedPreferencesMigration
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
-import io.pebbletemplates.pebble.PebbleEngine
-import kotlinx.coroutines.flow.catch
+import androidx.datastore.preferences.preferencesDataStoreFile
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.sync.withLock
@@ -27,8 +37,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.decodeFromJsonElement
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
-import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
 import me.rerere.rikkahub.data.gemini.DENIED_MODEL_IDS
@@ -130,10 +138,6 @@ private val Context.settingsStore by preferencesDataStore(
     }
 )
 
-class SettingsStore(
-    context: Context,
-    scope: AppScope,
-) : KoinComponent {
     companion object {
         // 版本号
         val VERSION = intPreferencesKey("data_version")
@@ -154,9 +158,11 @@ class SettingsStore(
         val TRANSLATE_MODEL = stringPreferencesKey("translate_model")
         val ENABLE_SUGGESTION = booleanPreferencesKey("enable_suggestion")
         val IMAGE_GENERATION_MODEL = stringPreferencesKey("image_generation_model")
+        val ENABLE_AUTO_TITLE = booleanPreferencesKey("enable_auto_title")
         val TITLE_PROMPT = stringPreferencesKey("title_prompt")
         val TRANSLATION_PROMPT = stringPreferencesKey("translation_prompt")
         val TRANSLATE_THINKING_BUDGET = intPreferencesKey("translate_thinking_budget")
+        val TRANSLATE_TARGET_LANGUAGE = stringPreferencesKey("translate_target_language")
         val SUGGESTION_PROMPT = stringPreferencesKey("suggestion_prompt")
         val OCR_MODEL = stringPreferencesKey("ocr_model")
         val OCR_PROMPT = stringPreferencesKey("ocr_prompt")
@@ -201,6 +207,10 @@ class SettingsStore(
 
         // S3
         val S3_CONFIG = stringPreferencesKey("s3_config")
+        val UPLOAD_S3_CONFIG = stringPreferencesKey("upload_s3_config")
+
+        // 媒体生成
+        val MEDIA_GENERATION_PROVIDERS = stringPreferencesKey("media_generation_providers")
 
         // TTS
         val TTS_PROVIDERS = stringPreferencesKey("tts_providers")
@@ -236,7 +246,7 @@ class SettingsStore(
         val SPONSOR_ALERT_DISMISSED_AT = intPreferencesKey("sponsor_alert_dismissed_at")
 
         // Uses the same DataStore singleton without starting settings flows or requiring Koin.
-        internal suspend fun restoreBeforeInitialization(context: Context, settings: Settings) {
+        internal suspend fun restoreBeforeInitialization(context: Context, settings: Settings, launchCount: Int) {
             require(!settings.init) { "Cannot restore uninitialized settings" }
             persistSettings(context.settingsStore, settings)
         }
@@ -332,14 +342,14 @@ class SettingsStore(
         }
     }
 
-    private val dataStore = context.settingsStore
-
-    val settingsFlowRaw = dataStore.data
-        .catch { exception ->
-            if (exception is IOException) {
-                emit(emptyPreferences())
-            } else {
-                throw exception
+    // 读取失败时绝不能回退为空配置, 否则默认值会被当成用户数据写回, 覆盖全部设置
+    // 偶发 IO 错误重试, 仍失败则向上抛出 (文件损坏由 corruptionHandler 处理)
+    private val preferencesFlow = dataStore.data
+        .retryWhen { cause, attempt ->
+            val shouldRetry = cause is IOException && cause !is CorruptionException && attempt < READ_MAX_RETRIES
+            if (shouldRetry) {
+                Log.w(TAG, "Failed to read settings, retrying (${attempt + 1}/$READ_MAX_RETRIES)", cause)
+                delay((100L shl attempt.toInt()).milliseconds)
             }
         }.map { preferences ->
             Settings(
@@ -699,7 +709,40 @@ class SettingsStore(
             get<PebbleEngine>().templateCache.invalidateAll()
         }
 
-    val settingsFlow = settingsFlowRaw
+    private val state = MutableStateFlow(Settings.dummy())
+
+    /** 当前设置。加载完成前是 [Settings.dummy]，需要真实设置时用 [awaitLoaded]。 */
+    val settingsFlow: StateFlow<Settings> = state.asStateFlow()
+
+    /** 等启动时的读盘完成后返回当前设置，不会返回 [Settings.dummy]。已经加载完时直接返回。 */
+    suspend fun awaitLoaded(): Settings = state.first { !it.init }
+
+    private val stateLock = Any()
+
+    // 已经落盘的那一份，只在持有 persistMutex 时读写。
+    // 启动后第一次写入前是 null，那一次整份写入：读盘时规整过、补出来的值要固定到盘上，不能只留在内存里
+    private var persisted: Settings? = null
+    private val persistMutex = Mutex()
+
+    init {
+        // 整份设置的 JSON 解码很重，不能放在主线程
+        scope.launch(Dispatchers.Default) {
+            state.value = try {
+                preferencesFlow.first().toSettings().normalized()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 读不出设置就不能带着占位值继续运行：界面上是一份默认设置，而任何修改都落不了盘
+                Log.e(TAG, "Failed to load settings", e)
+                Runtime.getRuntime().halt(1)
+                throw e
+            }
+        }
+    }
+
+    // 启动次数每次启动都会变，不放进 Settings，否则刚进入应用所有读取设置的界面就要重组一遍
+    val launchCountFlow: Flow<Int> = preferencesFlow
+        .map { preferences -> preferences[LAUNCH_COUNT] ?: 0 }
         .distinctUntilChanged()
         .toMutableStateFlow(scope, Settings.dummy())
 
@@ -742,66 +785,65 @@ class SettingsStore(
         }
     }
 
-    suspend fun updateAssistant(assistantId: Uuid) {
+    // 连续修改只写最新的一份：排队等锁的调用拿到锁时，它的修改多半已经被前一次写盘带上了。
+    // 不跟着调用方取消：页面关闭（viewModelScope 取消）时修改已经在内存里生效，不能只差落盘这一步。
+    // DataStore 在调用方的上下文里执行编码，所以要在这里切到后台线程
+    private suspend fun persist() {
+        withContext(NonCancellable + Dispatchers.Default) {
+            persistMutex.withLock {
+                val latest = state.value
+                val base = persisted
+                if (latest !== base) {
+                    dataStore.edit { preferences -> preferences.putSettings(latest, base) }
+                    persisted = latest
+                }
+            }
+        }
+    }
+
+    // 只原子地修改单个 key，不经过 Settings
+    suspend fun incrementLaunchCount(): Int {
+        var count = 0
         dataStore.edit { preferences ->
-            preferences[SELECT_ASSISTANT] = assistantId.toString()
+            count = (preferences[LAUNCH_COUNT] ?: 0) + 1
+            preferences[LAUNCH_COUNT] = count
+        }
+        return count
+    }
+
+    suspend fun setLaunchCount(count: Int) {
+        dataStore.edit { preferences -> preferences[LAUNCH_COUNT] = count }
+    }
+
+    /** 切换当前选中的助手。 */
+    suspend fun selectAssistant(assistantId: Uuid) {
+        update { it.copy(assistantId = assistantId) }
+    }
+
+    private suspend fun updateAssistant(assistantId: Uuid, transform: (Assistant) -> Assistant) {
+        update { settings ->
+            settings.copy(
+                assistants = settings.assistants.map { assistant ->
+                    if (assistant.id == assistantId) transform(assistant) else assistant
+                }
+            )
         }
     }
 
     suspend fun updateAssistantModel(assistantId: Uuid, modelId: Uuid) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(chatModelId = modelId)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
+        updateAssistant(assistantId) { it.copy(chatModelId = modelId) }
     }
 
     suspend fun updateAssistantReasoningLevel(assistantId: Uuid, reasoningLevel: ReasoningLevel) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(reasoningLevel = reasoningLevel)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
+        updateAssistant(assistantId) { it.copy(reasoningLevel = reasoningLevel) }
     }
 
     suspend fun updateAssistantWebSearch(assistantId: Uuid, enabled: Boolean) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(enableWebSearch = enabled)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
+        updateAssistant(assistantId) { it.copy(enableWebSearch = enabled) }
     }
 
     suspend fun updateAssistantMcpServers(assistantId: Uuid, mcpServers: Set<Uuid>) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(mcpServers = mcpServers)
-                    } else {
-                        assistant
-                    }
-                }
-            )
-        }
+        updateAssistant(assistantId) { it.copy(mcpServers = mcpServers) }
     }
 
     suspend fun updateAssistantInjections(
@@ -810,19 +852,11 @@ class SettingsStore(
         lorebookIds: Set<Uuid>,
         quickMessageIds: Set<Uuid> = emptySet(),
     ) {
-        update { settings ->
-            settings.copy(
-                assistants = settings.assistants.map { assistant ->
-                    if (assistant.id == assistantId) {
-                        assistant.copy(
-                            modeInjectionIds = modeInjectionIds,
-                            lorebookIds = lorebookIds,
-                            quickMessageIds = quickMessageIds,
-                        )
-                    } else {
-                        assistant
-                    }
-                }
+        updateAssistant(assistantId) {
+            it.copy(
+                modeInjectionIds = modeInjectionIds,
+                lorebookIds = lorebookIds,
+                quickMessageIds = quickMessageIds,
             )
         }
     }

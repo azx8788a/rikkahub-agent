@@ -56,6 +56,7 @@ import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
+import me.rerere.ai.util.mergeCustomHeaders
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.redactSecrets
 import me.rerere.ai.util.stringSafe
@@ -201,7 +202,7 @@ class ResponseAPI(
         )
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.responsesPath}")
-            .headers(params.customHeaders.toHeaders())
+            .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader(
                 "Authorization",
@@ -242,7 +243,7 @@ class ResponseAPI(
         )
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.responsesPath}")
-            .headers(params.customHeaders.toHeaders())
+            .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader(
                 "Authorization",
@@ -469,6 +470,9 @@ class ResponseAPI(
                                         tool.parameters()
                                     )
                                 )
+                                // Response API 不传 strict 时默认按严格模式处理, 会把 schema 里的可选字段全部变成必填,
+                                // 模型只能给本应省略的字段硬填默认值 (0 / "" / []), 导致工具参数校验失败
+                                put("strict", false)
                             })
                         }
                     }
@@ -486,7 +490,7 @@ class ResponseAPI(
                             BuiltInTools.ImageGeneration -> {
                                 add(buildJsonObject {
                                     put("type", "image_generation")
-                                    put("model", "gpt-image-2")
+                                    put("model", "gpt-image-2.5-sunburst")
                                 })
                             }
                         }

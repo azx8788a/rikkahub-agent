@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -46,7 +45,14 @@ data class GeneratedImage(
 
 private fun GenMediaEntity.toGeneratedImage(filesManager: FilesManager): GeneratedImage {
     val imagesDir = filesManager.getImagesDir()
-    val fullPath = File(imagesDir, this.path.removePrefix("images/")).absolutePath
+    val name = this.path.removePrefix("images/")
+    val file = File(imagesDir, name)
+    // 旧版本直接把含 "/" 的模型名拼进文件名，图片实际落在子目录里，而记录只存了最后一段
+    val fullPath = if (file.exists() || '/' !in modelId) {
+        file.absolutePath
+    } else {
+        File(imagesDir, "${createAt}_${modelId.substringBeforeLast('/')}/$name").absolutePath
+    }
 
     return GeneratedImage(
         id = this.id,
@@ -189,7 +195,7 @@ class ImgGenVM(
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
 
-                val settings = settingsStore.settingsFlow.first()
+                val settings = settingsStore.awaitLoaded()
                 val model = settings.findModelById(settings.imageGenerationModelId)
                     ?: throw IllegalStateException("No model selected")
 
@@ -233,7 +239,7 @@ class ImgGenVM(
                 _error.value = null
                 _currentGeneratedImages.value = emptyList()
 
-                val settings = settingsStore.settingsFlow.first()
+                val settings = settingsStore.awaitLoaded()
                 val model = settings.findModelById(settings.imageGenerationModelId)
                     ?: throw IllegalStateException("No model selected")
 

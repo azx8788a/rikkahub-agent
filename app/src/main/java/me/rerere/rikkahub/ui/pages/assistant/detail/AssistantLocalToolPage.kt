@@ -19,7 +19,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -32,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -40,7 +40,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import me.rerere.ui.toast.ToastType
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Calendar03
+import me.rerere.hugeicons.stroke.ChartLineData01
+import me.rerere.hugeicons.stroke.ClipboardPaste
+import me.rerere.hugeicons.stroke.Clock01
+import me.rerere.hugeicons.stroke.JavaScript
+import me.rerere.hugeicons.stroke.MessageQuestion
+import me.rerere.hugeicons.stroke.SmartPhone01
+import me.rerere.hugeicons.stroke.VolumeHigh
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.tools.LocalToolOption
 import me.rerere.rikkahub.data.ai.tools.local.PermissionHelper
@@ -242,6 +251,37 @@ private fun AssistantLocalToolContent(
         )
     }
 
+    fun CardGroupScope.toolItem(
+        option: LocalToolOption,
+        icon: ImageVector,
+        @StringRes title: Int,
+        @StringRes description: Int,
+    ) {
+        val checked = assistant.localTools.contains(option)
+        switchItem(
+            checked = checked,
+            onCheckedChange = { toggleLocalTool(option, it) },
+            // 图标底色跟着开关状态变化
+            leadingContent = {
+                CardGroupIcon(
+                    icon = icon,
+                    containerColor = if (checked) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    contentColor = if (checked) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            },
+            supportingContent = { Text(stringResource(description)) },
+            headlineContent = { Text(stringResource(title)) },
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -257,75 +297,35 @@ private fun AssistantLocalToolContent(
             modifier = Modifier.padding(start = 16.dp, top = 8.dp)
         )
         CardGroup {
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_javascript_engine_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_javascript_engine_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.JavascriptEngine),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.JavascriptEngine, it) }
-                    )
-                }
+            toolItem(
+                option = LocalToolOption.JavascriptEngine,
+                icon = HugeIcons.JavaScript,
+                title = R.string.assistant_page_local_tools_javascript_engine_title,
+                description = R.string.assistant_page_local_tools_javascript_engine_desc,
             )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_time_info_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_time_info_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.TimeInfo),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.TimeInfo, it) }
-                    )
-                }
+            toolItem(
+                option = LocalToolOption.TimeInfo,
+                icon = HugeIcons.Clock01,
+                title = R.string.assistant_page_local_tools_time_info_title,
+                description = R.string.assistant_page_local_tools_time_info_desc,
             )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_clipboard_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_clipboard_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.Clipboard),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.Clipboard, it) }
-                    )
-                }
+            toolItem(
+                option = LocalToolOption.Clipboard,
+                icon = HugeIcons.ClipboardPaste,
+                title = R.string.assistant_page_local_tools_clipboard_title,
+                description = R.string.assistant_page_local_tools_clipboard_desc,
             )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_tts_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_tts_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.Tts),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.Tts, it) }
-                    )
-                }
+            toolItem(
+                option = LocalToolOption.Tts,
+                icon = HugeIcons.VolumeHigh,
+                title = R.string.assistant_page_local_tools_tts_title,
+                description = R.string.assistant_page_local_tools_tts_desc,
             )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_ask_user_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_ask_user_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.AskUser),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.AskUser, it) }
-                    )
-                }
+            toolItem(
+                option = LocalToolOption.AskUser,
+                icon = HugeIcons.MessageQuestion,
+                title = R.string.assistant_page_local_tools_ask_user_title,
+                description = R.string.assistant_page_local_tools_ask_user_desc,
             )
         }
 

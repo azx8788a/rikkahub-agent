@@ -68,20 +68,7 @@ class WorkspaceReminderTransformer(
             workingDirectory.resolve("AGENTS.md").toString(),
         )
         val instructions = paths.mapNotNull { path ->
-            try {
-                val size = workspaceRepository.rootfsFileSize(workspaceId, path)
-                require(size <= MAX_AGENTS_BYTES) { "AGENTS.md exceeds $MAX_AGENTS_BYTES bytes" }
-                val content = ByteArrayOutputStream().use { output ->
-                    workspaceRepository.exportRootfsFile(workspaceId, path, output)
-                    output.toString(Charsets.UTF_8.name())
-                }
-                content.takeIf { it.isNotBlank() }?.let { path to it }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.d("WorkspaceReminder", "Skipping workspace instructions: $path", e)
-                null
-            }
+            readRootfsText(workspaceId, path, MAX_AGENTS_BYTES)?.let { path to it }
         }
         if (instructions.isEmpty()) return ""
         return buildString {
@@ -98,8 +85,32 @@ class WorkspaceReminderTransformer(
         }
     }
 
+    private suspend fun readDistroName(workspaceId: String): String? =
+        OS_RELEASE_PATHS.firstNotNullOfOrNull { path ->
+            readRootfsText(workspaceId, path, MAX_OS_RELEASE_BYTES)?.let(::parseOsReleaseName)
+        }
+
+    // 文件不存在、过大或不可读时返回 null, 不影响提示词的其余部分
+    private suspend fun readRootfsText(workspaceId: String, path: String, maxBytes: Long): String? =
+        try {
+            val size = workspaceRepository.rootfsFileSize(workspaceId, path)
+            require(size <= maxBytes) { "$path exceeds $maxBytes bytes" }
+            val content = ByteArrayOutputStream().use { output ->
+                workspaceRepository.exportRootfsFile(workspaceId, path, output)
+                output.toString(Charsets.UTF_8.name())
+            }
+            content.takeIf { it.isNotBlank() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d("WorkspaceReminder", "Skipping workspace file: $path", e)
+            null
+        }
+
     private companion object {
         const val MAX_AGENTS_BYTES = 64L * 1024
+        const val MAX_OS_RELEASE_BYTES = 16L * 1024
+        val OS_RELEASE_PATHS = listOf("/etc/os-release", "/usr/lib/os-release")
     }
 }
 
@@ -132,6 +143,14 @@ private fun buildWorkspacePrompt(workspace: WorkspaceEntity, cwd: String? = null
     appendLine("You have access to a persistent Linux workspace named \"${workspace.name}\", running in a sandboxed proot rootfs environment.")
     appendLine("- The workspace files area is mounted at `/workspace`. Use it as your working directory; files written there persist across turns of this conversation.")
     appendLine("- All paths passed to workspace tools must be absolute and inside the Rootfs (for example `/workspace/notes.md`).")
+    if (distro != null) {
+        appendLine("- The Rootfs distribution is $distro. Use its native package manager when you need to install missing tools.")
+    }
+    if (shell == "/bin/bash") {
+        appendLine("- `workspace_shell` runs commands with `/bin/bash`.")
+    } else {
+        appendLine("- `workspace_shell` runs commands with `$shell`, a POSIX shell. Bash is not installed, so avoid bash-only syntax such as arrays, here-strings (`<<<`) and brace expansion.")
+    }
     appendLine("- Available tools:")
     appendLine("  - `workspace_read_file`: read file contents.")
     appendLine("  - `workspace_write_file` / `workspace_edit_file`: create files, or make precise edits to existing files.")
@@ -144,6 +163,7 @@ private fun buildWorkspacePrompt(workspace: WorkspaceEntity, cwd: String? = null
     appendLine("- Prefer `workspace_shell` for tasks that standard Unix tools handle well, and prefer `workspace_edit_file` for targeted edits over rewriting whole files.")
     appendLine("- To preview web files in the browser, start a static server with `workspace_run_background` (for example `python3 -m http.server 8000`) and then open it, since file:// breaks ES modules and fetch.")
     appendLine("- The skills directory is mounted at `/skills`. Each skill is a subdirectory `/skills/<skill-name>/` containing a `SKILL.md` (with `name` and `description` frontmatter) plus any supporting files. Read a skill's `SKILL.md` before using it, and follow its instructions.")
+    appendLine("- Built-in skills shipped with the app are mounted at `/builtin_skills/<skill-name>/` with the same layout. Treat `/builtin_skills` as READ-ONLY: you may read files and run scripts there, but never modify, overwrite, or delete anything. A skill in `/skills` with the same name overrides the built-in one.")
     appendLine("- Files the user uploaded are mounted at `/upload`. Treat `/upload` as READ-ONLY: read uploaded files from `/upload/<file-name>`, but never modify, overwrite, or delete anything there. If you need to change an uploaded file, copy it into `/workspace` first and edit the copy.")
     if (!cwd.isNullOrBlank()) {
         appendLine("- Current working directory: `$cwd`. Use this as the default context for file operations and shell commands.")

@@ -56,6 +56,7 @@ import me.rerere.ai.util.configureSessionHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
+import me.rerere.ai.util.mergeCustomHeaders
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.redactSecrets
 import me.rerere.ai.util.stringSafe
@@ -101,7 +102,7 @@ class ChatCompletionsAPI(
 
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
-            .headers(params.customHeaders.toHeaders())
+            .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("Authorization", "Bearer ${keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())}")
             .configureReferHeaders(providerSetting.baseUrl)
@@ -155,7 +156,7 @@ class ChatCompletionsAPI(
 
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
-            .headers(params.customHeaders.toHeaders())
+            .headers(providerSetting.mergeCustomHeaders(params.customHeaders))
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .addHeader("Authorization", "Bearer ${keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())}")
             .addHeader("Content-Type", "application/json")
@@ -324,9 +325,10 @@ class ChatCompletionsAPI(
 
                     "dashscope.aliyuncs.com" -> {
                         // 阿里云百炼
-                        // https://bailian.console.aliyun.com/console?tab=doc#/doc/?type=model&url=https%3A%2F%2Fhelp.aliyun.com%2Fdocument_detail%2F2870973.html&renderType=iframe
-                        put("enable_thinking", level.isEnabled)
-                        if (level != ReasoningLevel.AUTO) put("thinking_budget", level.budgetTokens)
+                        // https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions
+                        if (level != ReasoningLevel.AUTO) {
+                            put("reasoning_effort", level.effort)
+                        }
                     }
 
                     "ark.cn-beijing.volces.com" -> {
@@ -448,10 +450,8 @@ class ChatCompletionsAPI(
                     }
 
                     else -> {
-                        // OpenAI 官方
-                        // 文档中，completions API 只支持 "low", "medium", "high"
                         if (level != ReasoningLevel.AUTO) {
-                            put("reasoning_effort", if (level.effort == "none") "low" else level.effort)
+                            put("reasoning_effort", level.effort)
                         }
                     }
                 }
@@ -640,7 +640,6 @@ class ChatCompletionsAPI(
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("role", "tool")
-                            put("name", tool.toolName)
                             put("tool_call_id", tool.toolCallId)
                             put("content", tool.toToolResultContent(supportInputModalities))
                         })

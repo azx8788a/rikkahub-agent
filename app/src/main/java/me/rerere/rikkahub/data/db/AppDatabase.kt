@@ -14,6 +14,8 @@ import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.FolderDAO
 import me.rerere.rikkahub.data.db.dao.GenMediaDAO
 import me.rerere.rikkahub.data.db.dao.ManagedFileDAO
+import me.rerere.rikkahub.data.db.dao.MediaCreationDAO
+import me.rerere.rikkahub.data.db.dao.MemoryConsolidationDAO
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.dao.ScheduledJobDao
@@ -27,7 +29,11 @@ import me.rerere.rikkahub.data.db.entity.FavoriteEntity
 import me.rerere.rikkahub.data.db.entity.FolderEntity
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
-import me.rerere.rikkahub.data.db.entity.MemoryEntity
+import me.rerere.rikkahub.data.db.entity.MediaCreationNodeEntity
+import me.rerere.rikkahub.data.db.entity.MediaCreationRecordEntity
+import me.rerere.rikkahub.data.db.entity.MediaCreationSessionEntity
+import me.rerere.rikkahub.data.db.entity.MemoryConsolidationEntity
+import me.rerere.rikkahub.data.db.entity.MemoryFileEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.entity.ScheduledJobEntity
 import me.rerere.rikkahub.data.db.entity.ScheduledJobRunEntity
@@ -38,6 +44,7 @@ import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_20_21
 import me.rerere.rikkahub.data.db.migrations.Migration_21_22
 import me.rerere.rikkahub.data.db.migrations.Migration_22_23
+import me.rerere.rikkahub.data.db.migrations.Migration_28_29
 import me.rerere.rikkahub.data.db.migrations.Migration_8_9
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.workflow.db.WorkflowDao
@@ -63,6 +70,10 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         AgentRun::class,
         WorkspaceEntity::class,
         FolderEntity::class,
+        MediaCreationSessionEntity::class,
+        MediaCreationNodeEntity::class,
+        MediaCreationRecordEntity::class,
+        TranslationHistoryEntity::class,
     ],
     version = 31,
     autoMigrations = [
@@ -123,6 +134,8 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun memoryDao(): MemoryDAO
 
+    abstract fun memoryConsolidationDao(): MemoryConsolidationDAO
+
     abstract fun genMediaDao(): GenMediaDAO
 
     abstract fun messageNodeDao(): MessageNodeDAO
@@ -148,6 +161,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun workspaceDao(): WorkspaceDAO
 
     abstract fun folderDao(): FolderDAO
+
+    abstract fun mediaCreationDao(): MediaCreationDAO
+
+    abstract fun translationHistoryDao(): TranslationHistoryDAO
 }
 
 object TokenUsageConverter {

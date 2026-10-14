@@ -36,6 +36,7 @@ class ChatServiceTest {
             assistantId = Uuid.random(),
             title = "Source conversation",
             messageNodes = emptyList(),
+            config = ConversationConfig(chatModelId = Uuid.random(), reasoningLevel = ReasoningLevel.HIGH),
             workspaceCwd = "/workspace/project",
             folderId = Uuid.random(),
         )
@@ -44,10 +45,46 @@ class ChatServiceTest {
 
         assertNotEquals(source.id, fork.id)
         assertEquals(source.assistantId, fork.assistantId)
+        assertEquals(source.config, fork.config)
         assertEquals(source.workspaceCwd, fork.workspaceCwd)
         assertEquals(source.folderId, fork.folderId)
-        assertEquals("", fork.title)
+        assertEquals("Source conversation(1)", fork.title)
         assertFalse(fork.isPinned)
+    }
+
+    @Test
+    fun `context checkpoint is inserted after the anchor node without touching other nodes`() {
+        val nodes = List(4) { UIMessage.user("message $it").toMessageNode() }
+        val source = Conversation(assistantId = Uuid.random(), messageNodes = nodes)
+
+        val result = insertContextCheckpoint(source, afterNodeId = nodes[1].id, summary = "summary")!!
+
+        assertEquals(nodes.subList(0, 2), result.messageNodes.subList(0, 2))
+        assertEquals(nodes.subList(2, 4), result.messageNodes.subList(3, 5))
+        val checkpoint = result.messageNodes[2].currentMessage
+        assertTrue(checkpoint.isContextCheckpoint)
+        assertEquals("summary", checkpoint.toText())
+        // 只有检查点之后的消息会继续发送给模型
+        assertEquals(result.currentMessages.subList(2, 5), result.currentMessages.limitContext(0))
+    }
+
+    @Test
+    fun `context checkpoint is not inserted when the anchor node is gone`() {
+        val source = Conversation(
+            assistantId = Uuid.random(),
+            messageNodes = listOf(UIMessage.user("message").toMessageNode()),
+        )
+
+        assertNull(insertContextCheckpoint(source, afterNodeId = Uuid.random(), summary = "summary"))
+    }
+
+    @Test
+    fun `fork title increments existing numeric suffix instead of stacking`() {
+        assertEquals("Chat(2)", forkConversationTitle("Chat(1)", emptySet()))
+        assertEquals("Chat(4)", forkConversationTitle("Chat(1)", setOf("Chat(2)", "Chat(3)")))
+        assertEquals("Chat(1)", forkConversationTitle("Chat", emptySet()))
+        assertEquals("Chat(2)", forkConversationTitle("Chat", setOf("Chat(1)")))
+        assertEquals("Chat(abc)(1)", forkConversationTitle("Chat(abc)", emptySet()))
     }
 
     @Test
@@ -60,12 +97,14 @@ class ChatServiceTest {
             customBodies = bodies,
         )
 
-        val params = backgroundTextGenerationParams(model)
+        val conversationId = Uuid.random()
+        val params = backgroundTextGenerationParams(model, conversationId)
 
         assertEquals(model, params.model)
         assertEquals(ReasoningLevel.OFF, params.reasoningLevel)
         assertEquals(headers, params.customHeaders)
         assertEquals(bodies, params.customBody)
+        assertEquals(conversationId.toString(), params.sessionId)
     }
 
     @Test

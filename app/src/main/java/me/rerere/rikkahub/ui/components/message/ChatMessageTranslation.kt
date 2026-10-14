@@ -50,6 +50,8 @@ import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.LanguageCircle
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.ui.components.ai.TranslationLanguages
+import me.rerere.rikkahub.ui.components.ai.translationLanguageName
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import java.util.Locale
 
@@ -139,7 +141,7 @@ fun LanguageSelectionDialog(
                                 modifier = Modifier.size(24.dp)
                             )
                             Text(
-                                text = getLanguageDisplayName(language),
+                                text = translationLanguageName(language),
                                 style = MaterialTheme.typography.titleMedium,
                             )
                         }

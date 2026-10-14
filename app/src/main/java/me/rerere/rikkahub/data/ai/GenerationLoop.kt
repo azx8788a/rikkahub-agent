@@ -472,7 +472,7 @@ class GenerationLoop(
         inputTransformers: List<InputMessageTransformer> = emptyList(),
         outputTransformers: List<OutputMessageTransformer> = emptyList(),
         assistant: Assistant,
-        memories: List<AssistantMemory>? = null,
+        memories: List<MemoryFile>? = null,
         tools: List<Tool> = emptyList(),
         // Read live from the runtime holder, not captured once: the default expression is
         // evaluated per call, so a settings change takes effect on the next turn.
@@ -499,8 +499,6 @@ class GenerationLoop(
         systemAddendum: String? = null,
         conversationSystemPrompt: String? = null,
         conversationId: Uuid? = null,
-        conversationModeInjectionIds: Set<Uuid> = emptySet(),
-        conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
@@ -1236,13 +1234,11 @@ class GenerationLoop(
         providerImpl: Provider<ProviderSetting>,
         provider: ProviderSetting,
         tools: List<Tool>,
-        memories: List<AssistantMemory>,
+        memories: List<MemoryFile>,
         stream: Boolean,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
         conversationSystemPrompt: String? = null,
         conversationId: Uuid? = null,
-        conversationModeInjectionIds: Set<Uuid> = emptySet(),
-        conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
     ) {
         val internalMessages = buildList {
@@ -1289,8 +1285,6 @@ class GenerationLoop(
             model = model,
             assistant = assistant,
             settings = settings,
-            conversationModeInjectionIds = conversationModeInjectionIds,
-            conversationLorebookIds = conversationLorebookIds,
             processingStatus = processingStatus,
             workspaceCwd = workspaceCwd,
         )
@@ -1312,7 +1306,7 @@ class GenerationLoop(
                 addAll(assistant.customBodies)
                 addAll(model.customBodies)
             },
-            sessionId = conversationId?.toString(),
+            sessionId = (conversationId ?: Uuid.random()).toString(),
         )
         try {
             if (stream) {
@@ -1420,10 +1414,13 @@ class GenerationLoop(
     }
 
     private fun maybeTruncateToolOutput(
-        toolCallId: String,
+        tool: UIMessagePart.Tool,
         output: List<UIMessagePart>,
         hasShellAccess: Boolean,
     ): List<UIMessagePart> {
+        if (tool.toolName in TOOLS_WITHOUT_OUTPUT_TRUNCATION) return output
+
+        val toolCallId = tool.toolCallId
         val textParts = output.filterIsInstance<UIMessagePart.Text>()
         val nonTextParts = output.filter { it !is UIMessagePart.Text }
         val totalChars = textParts.sumOf { it.text.length }

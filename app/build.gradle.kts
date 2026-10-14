@@ -13,7 +13,11 @@ plugins {
 
 android {
     namespace = "me.rerere.rikkahub"
-    compileSdk = 37
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
         applicationId = "excp.rikkahub"
@@ -165,7 +169,16 @@ kotlin {
     }
 }
 
+// Local JVM tests need the desktop native library instead of the Android AAR.
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute(module("io.github.dokar3:quickjs-kt-android"))
+            .using(module("io.github.dokar3:quickjs-kt-jvm:${libs.versions.quickjs.get()}"))
+    }
+}
+
 dependencies {
+    implementation(libs.quickjs)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.process)
@@ -199,19 +212,18 @@ dependencies {
     // https://github.com/drewnoakes/metadata-extractor
     implementation(libs.metadata.extractor)
 
-    // Haze (background blur)
+    // Haze (background blur and glass)
     implementation(libs.haze)
     implementation(libs.haze.blur)
     implementation(libs.haze.blur.material3)
+    implementation(libs.haze.glass)
+    implementation(libs.haze.glass.material3)
 
     // koin
     implementation(platform(libs.koin.bom))
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
     implementation(libs.koin.androidx.workmanager)
-
-    // jetbrains markdown parser
-    implementation(libs.jetbrains.markdown)
 
     // okhttp
     implementation(libs.okhttp)
@@ -265,17 +277,17 @@ dependencies {
     implementation(libs.androidx.paging.runtime)
     implementation(libs.androidx.paging.compose)
 
+    // media3 (video playback)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
+
     // Apache Commons Text
     implementation(libs.commons.text)
-
-    // Toast (Sonner)
-    implementation(libs.sonner)
 
     // Reorderable (https://github.com/Calvin-LL/Reorderable/)
     implementation(libs.reorderable)
 
-    // lucide icons
-    implementation(libs.lucide.icons)
+    // icons
     implementation(libs.huge.icons)
 
     // image viewer
@@ -324,9 +336,10 @@ dependencies {
     implementation(project(":highlight"))
     implementation(project(":search"))
     implementation(project(":speech"))
-    implementation(project(":videogen"))
+    implementation(project(":mediagen"))
     implementation(project(":common"))
     implementation(project(":material3"))
+    implementation(project(":ui"))
     implementation(project(":workspace"))
     implementation(project(":oauth"))
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
@@ -346,6 +359,7 @@ dependencies {
 
     // tests
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -2,9 +2,7 @@ package me.rerere.rikkahub.ui.pages.setting
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
-import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Delete01
-import me.rerere.hugeicons.stroke.MoreVertical
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,8 +20,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
@@ -41,10 +37,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -53,16 +46,20 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
-import me.rerere.rikkahub.ui.components.ui.FormItem
-import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
+import me.rerere.rikkahub.ui.components.ui.ItemAction
+import me.rerere.rikkahub.ui.components.ui.ItemActionMenu
 import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TagType
+import me.rerere.rikkahub.ui.components.ui.longPressReorder
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchService
 import me.rerere.search.SearchServiceOptions
+import me.rerere.ui.components.FormItem
+import me.rerere.ui.components.OutlinedNumberInput
+import me.rerere.ui.components.RikkaConfirmDialog
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -76,6 +73,7 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
     val scope = rememberCoroutineScope()
     val nav = LocalNavController.current
     var showAddDialog by remember { mutableStateOf(false) }
+    var deleteTarget by remember { mutableStateOf<SearchServiceOptions?>(null) }
 
     Scaffold(
         topBar = {
@@ -111,12 +109,11 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
                 val newServices = settings.searchServices.toMutableList().apply {
                     add(toIndex, removeAt(fromIndex))
                 }
-                vm.updateSettings(
-                    settings.copy(searchServices = newServices)
-                )
+                vm.updateSettings {
+                    it.copy(searchServices = newServices)
+                }
             }
         }
-        val haptic = LocalHapticFeedback.current
 
         LazyColumn(
             modifier = Modifier
@@ -137,27 +134,12 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
                             nav.navigate(Screen.SettingSearchDetail(service.id.toString()))
                         },
                         onDelete = {
-                            if (settings.searchServices.size > 1) {
-                                val index = settings.searchServices.indexOf(service)
-                                val newServices = settings.searchServices.toMutableList()
-                                newServices.removeAt(index)
-                                vm.updateSettings(
-                                    settings.copy(searchServices = newServices)
-                                )
-                            }
+                            deleteTarget = service
                         },
                         canDelete = settings.searchServices.size > 1,
                         modifier = Modifier
-                            .scale(if (isDragging) 0.95f else 1f)
                             .animateItem()
-                            .longPressDraggableHandle(
-                                onDragStarted = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                                },
-                                onDragStopped = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
-                                }
-                            )
+                            .then(longPressReorder(isDragging))
                     )
                 }
             }
@@ -185,16 +167,34 @@ fun SettingSearchPage(vm: SettingVM = koinViewModel()) {
             onDismiss = { showAddDialog = false },
             onConfirm = { options ->
                 showAddDialog = false
-                vm.updateSettings(
-                    settings.copy(
-                        searchServices = listOf(options) + settings.searchServices
+                vm.updateSettings {
+                    it.copy(
+                        searchServices = listOf(options) + it.searchServices
                     )
-                )
+                }
                 scope.launch {
                     lazyListState.animateScrollToItem(0)
                 }
             }
         )
+    }
+
+    RikkaConfirmDialog(
+        show = deleteTarget != null,
+        title = stringResource(R.string.confirm_delete),
+        confirmText = stringResource(R.string.delete),
+        dismissText = stringResource(R.string.cancel),
+        onConfirm = {
+            deleteTarget?.let { target ->
+                vm.updateSettings { latest ->
+                    latest.copy(searchServices = latest.searchServices.filter { it.id != target.id })
+                }
+            }
+            deleteTarget = null
+        },
+        onDismiss = { deleteTarget = null },
+    ) {
+        Text(stringResource(R.string.common_delete_confirm_message, deleteTarget?.displayName.orEmpty()))
     }
 }
 
@@ -280,9 +280,8 @@ private fun SearchProviderCard(
     canDelete: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    var showMenu by remember { mutableStateOf(false) }
-
     Card(
+        onClick = onEdit,
         modifier = modifier,
         colors = CardDefaults.cardColors(
             containerColor = CustomColors.listItemColors.containerColor
@@ -316,34 +315,7 @@ private fun SearchProviderCard(
                     imageVector = HugeIcons.MoreVertical,
                     contentDescription = stringResource(R.string.accessibility_more_options)
                 )
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.edit)) },
-                        onClick = {
-                            showMenu = false
-                            onEdit()
-                        },
-                        leadingIcon = {
-                            Icon(HugeIcons.PencilEdit01, contentDescription = null)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.delete)) },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        },
-                        leadingIcon = {
-                            Icon(HugeIcons.Delete01, contentDescription = null)
-                        },
-                        enabled = canDelete
-                    )
-                }
-            }
-
+            )
         }
     }
 }
