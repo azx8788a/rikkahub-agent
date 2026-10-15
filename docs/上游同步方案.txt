@@ -1,0 +1,137 @@
+上游同步方案（供外部模型评审）
+
+作者身份：azx8788a，负责执行合并的一方。读者没有本书写环境，本文档包含评审所需全部背景。
+
+一、项目背景
+
+rikkahub 是开源安卓 AI 聊天应用，Kotlin + Jetpack Compose，官方仓库 rikkahub/rikkahub。
+rikkahub-agent 是第三方 ExTV 基于 rikkahub 做的分支，加入了代理能力（工具调用、技能、本地大模型提供商等）。
+我们（azx8788a）在 rikkahub-agent 基础上又做了少量自用修改（上下文压缩修复等）。
+官方目前已从 2.5.1 更新到 2.5.6，新增 140 个提交（界面改版、新模型、画板、记忆系统、MCP 修复等）。
+目标：把这 140 个提交合并进我们的分支，功能不丢、能编译、能出 APK。
+
+二、环境限制
+
+工作环境是 Linux 沙箱，没有安卓 SDK，无法在本地编译安卓工程。
+所有编译验证靠 GitHub Actions 云端 CI：推送代码后自动编译，每轮约 15-20 分钟，失败后看日志定位。
+因此每次提交前只能人工静态检查，必须尽量一次修对减少 CI 往返。
+
+三、分支结构
+
+dev/azx：稳定分支，已有全部修改（含压缩修复），CI 绿，能出 APK。此分支全程不动。
+dev/upstream-sync：实验分支，专门做上游合并。用 -X ours 策略把 140 个提交一次性合并进来。
+master：未动。
+
+四、已完成工作
+
+合并已执行，冲突处 -X ours（以我方为主、冲突保留我方；不冲突区自动并入上游）。
+合并后有 6 个机械性修复提交：
+  1. videogen 模块改名 mediagen，构建配置同步
+  2. 删除遗留 videogen 目录
+  3. Gradle 版本 9.5 升 9.6.0
+  4. CI JDK 换 temurin（jetbrains DNS 不稳定）
+  5. 补齐上游新依赖 haze-glass 的版本声明
+  6. QuickJS 库整套回退旧栈（上游迁移 quickjs-kt，我方 agent 代码用旧 wrapper）
+
+修复后 CI 编译推进到 ai 模块（AI 核心库），目前在 ai 编译失败。
+
+五、当前问题：语义混合
+
+-X ours 的规则：文本冲突处保留我方，不冲突处自动并入上游。但代码是整体，出现错位：
+- 上游新代码调用了上游新接口，但接口定义所在位置冲突、被我们旧版覆盖
+- 我们保留的旧代码和上游自动并入的新代码在同一文件里不匹配
+
+最新 CI 运行编号 38725532093（提交 f079d3c2），在 :ai:compileReleaseKotlin 失败，报 29 个错误，全集中在 4 个文件：
+
+  文件 1：ProviderSetting.kt（18 条错误）
+  我们有 6 个自定义模型提供商类（AICore、LiteRtLocal、LlamaCppLocal、Codex、Grok、
+  GeminiOAuth）来自 ExTV fork。上游在基类中新增了 abstract val customHeaders 
+  和 copyProvider 的 customHeaders 参数（已自动并入接口定义处）。但这 6 个类没有
+  override customHeaders，copyProvider 签名也缺少 customHeaders 参数。
+  
+  文件 2：util/Request.kt（4 条错误）
+  上游在此文件新增了 mergeCustomHeaders 扩展函数（fun ProviderSetting.mergeCustomHeaders()），
+  但文件顶部缺少 import me.rerere.ai.provider.ProviderSetting，导致 ProviderSetting 类型
+  无法解析，进而链式引发 customHeaders、name 字段和 toHeaders 调用均报错。
+
+  文件 3：OpenAIProvider.kt（3 条错误，toHeaders 引用）
+  上游在 OpenAIProvider.kt 中把 import me.rerere.ai.util.toHeaders 换成了
+  import me.rerere.ai.util.mergeCustomHeaders，但我方保留的 3 处代码仍调用
+  params.customHeaders.toHeaders()，缺少对应 import。
+
+  文件 4：OpenAIProvider.kt（3 条错误，ImageEditParams.size）
+  上游新增函数 editImageWithInputReferences 使用了 params.size 字段，
+  但 Provider.kt 的 ImageEditParams 结构保留了我方的旧字段 aspectRatio，
+  没有 size 字段。此为"语义决策点"。
+
+CI 按模块顺序编译。ai 通过之后才会到 app 模块（约 124 个交叉文件）。
+
+六、交叉文件全量（工作清单尺码）
+
+以双方共同祖先 2689e75（2026-09-10，上游提交 feat: 支持读取AGENTS.md）为基准：
+  我方改过的文件：982 个
+  上游改过的文件：570 个
+  双方都改过的文件（交叉）：220 个
+  去除测试后：215 个
+  按模块分布（前五）：app(124)、.agents(67)、ai(12)、workspace(2)、search(2)
+  其中 .agents(67) 在合并阶段已处理为"保持我方删除"，不需后续修复。
+  实际待修复交叉文件约 138 个（app 124 + ai 12 + 其他小项）。
+
+七、修复方案
+
+策略：保留当前的 -X ours 合并产物，按模块逐层修，不重做合并。
+理由：我方定制量大（代理功能成体系），重做成本远高于修补。
+每文件裁决三选一：
+  a. 我方无定制的文件：直接取上游整版
+  b. 双方都有改动：手工融合（以我方为主、补上游新接口）
+  c. 逻辑冲突严重：以我方为准，记录备忘
+
+执行顺序：
+  第 1 批：ai 模块（12 个交叉文件，目前 29 个已知错误全在此）
+    1. ProviderSetting.kt：给 6 个自定类补 customHeaders + copyProvider 参数（机械）
+    2. util/Request.kt：补 import me.rerere.ai.provider.ProviderSetting
+    3. OpenAIProvider.kt：补 import me.rerere.ai.util.toHeaders
+    4. OpenAIProvider.kt ImageEditParams：两字段短期并存方案——
+       在 ImageEditParams 加 val size: String = "auto"（上游新函数用）；
+       保留 aspectRatio（我方旧路径继续用）；不加 ImageGenSize 枚举（用裸字符串），
+       避免新增依赖环路。此为最小改动，两端代码均编译通过，语义无冲突。
+    5. 扫其余 ai 交叉文件，同类问题一并修。
+    6. 静态自检（引用/import/签名），推送 CI。
+  第 2 批：app 模块（124 个交叉文件）
+    按功能簇分批：数据层（DB schema 迁移、设置存储）→ 核心服务（消息生成、
+    压缩摘要、工具系统）→ 界面层（MD3 改版几十个页面 + 我方 agent 入口接回）。
+    每批提交一次 CI。
+    ImageEditParams 后续影响：若 app 侧 ImgGenVM 编译因 size/aspectRatio 报错，
+    一并适配（短期两字段共存不会引发编译问题；如后续决定统一，再专项处理）。
+  第 3 批：workspace、search 等其余模块。
+  第 4 批：CI 全绿 → 产 APK → 真机验收（重点：压缩摘要、agent 工具、本地模型）。
+
+八、关键决策说明
+
+  决策 4（ImageEditParams）：不选"全面采用上游 size 方案"的原因——
+  上游 size 依赖 ImageGenSize 枚举（定义在 ai/ui/Image.kt，该文件在我方
+  树未合并、上游的 size 相关 app UI 也未并入），全面改造需同时动 ai 和
+  app 两个模块，约 10+ 文件、涉及界面改动，跨模块风险大。用两字段短期
+  共存方案，编译通过后，后续可择机统一（那时上游相关界面代码也一起评估）。
+
+九、风险
+
+  最大风险：CI 往返慢（每轮 15-20 分钟），若修不全会多轮折腾。缓解：静态自查。
+  次大风险：编译通过不等于运行正常（数据库迁移、依赖注入、序列化等运行期问题
+  要到真机才暴露）。缓解：后期真机验收覆盖关键路径。
+
+十、替代方案（已评估，不用）
+
+  1. 重做合并，以对方为主再重写我方功能：我方代理功能改动量大，成本高。
+  2. 逐个挑选上游提交：140 个提交交织，逐个挑更慢。
+  3. 放弃同步：官方持续更新，越拖越难合。
+
+十一、请评审的关键问题
+
+  1. 三选一裁决规则是否合理？
+  2. 无法本地编译的条件下，怎样更高效发现语义错位？
+  3. ImageEditParams 两字段并存的过渡方案是否可行？有无更优解？
+  4. -X ours 合并本身是否可行？还是应该换个合并策略？
+  5. ai 模块 29 个报错的分析有无遗漏？
+
+（本文档自动编号，无需特殊字符。如需补充信息请提。）
