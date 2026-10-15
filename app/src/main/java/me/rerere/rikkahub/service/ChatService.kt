@@ -2877,11 +2877,11 @@ class ChatService(
         model: Model,
         prompt: String,
     ): String = coroutineScope {
-        val lastActivityMs = AtomicLong(System.currentTimeMillis())
+        val lastActivityMs = AtomicLong(SystemClock.elapsedRealtime())
         val watchdog = launch {
             while (isActive) {
                 delay(5_000)
-                val idleMs = System.currentTimeMillis() - lastActivityMs.get()
+                val idleMs = SystemClock.elapsedRealtime() - lastActivityMs.get()
                 check(idleMs <= COMPACTION_STREAM_STALL_MS) {
                     "Compaction stream stalled for ${idleMs / 1000}s without any data"
                 }
@@ -2894,7 +2894,7 @@ class ChatService(
                 messages = listOf(UIMessage.user(prompt)),
                 params = backgroundTextGenerationParams(model),
             ).collect { chunk ->
-                lastActivityMs.set(System.currentTimeMillis())
+                lastActivityMs.set(SystemClock.elapsedRealtime())
                 if (chunk is StreamChunk.TextDelta) {
                     text.append(chunk.text)
                 }
